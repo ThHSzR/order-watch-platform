@@ -1,0 +1,156 @@
+import { config } from './config.js';
+import { checkAmazon, manualAuth } from './amazon-browser.js';
+import { transition } from './state-machine.js';
+import { sendNotification } from './gateway.js';
+import { ensureAdbForward } from './adb-forward.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { runPollingLoop, shouldAlertAfterAuthChecks } from '@jeremias/order-watch-core';
+
+const alerts=new Set(['SHIPPED','OUT_FOR_DELIVERY','DELIVERED','CANCELLED']);
+const label={SHIPPED:'PEDIDO ENVIADO',OUT_FOR_DELIVERY:'SAIU PARA ENTREGA',DELIVERED:'PEDIDO ENTREGUE',CANCELLED:'PEDIDO CANCELADO'};
+const icon={SHIPPED:'🎮',OUT_FOR_DELIVERY:'🚚',DELIVERED:'✅',CANCELLED:'⚠️'};
+const statusLabel={UNKNOWN:'Desconhecido',ORDER_CONFIRMED:'Pedido feito',PREPARING:'Preparando',SHIPPED:'Enviado',OUT_FOR_DELIVERY:'Saiu para entrega',DELIVERED:'Entregue',CANCELLED:'Cancelado'};
+const logPath=path.join(path.dirname(config.dbPath),'watcher.log');
+const log=(event,fields={})=>{
+  const line=JSON.stringify({at:new Date().toISOString(),event,...fields});
+  console.log(line);
+  try { fs.appendFileSync(logPath,`${line}\n`,{mode:0o600}); } catch {}
+};
+const AUTH_ALERT_THRESHOLD=2;
+
+function messageFor(state,at){
+  const date=new Intl.DateTimeFormat('pt-BR',{dateStyle:'short',timeStyle:'short',timeZone:'America/Sao_Paulo'}).format(new Date(at));
+  return `${icon[state]} GTA VI — ${label[state]}\nA Amazon atualizou o status da sua pré-venda.\n📦 Status: ${label[state].replace('PEDIDO ','').replace('SAIU PARA ENTREGA','Saiu para entrega').replace('ENVIADO','Enviado').replace('ENTREGUE','Entregue').replace('CANCELADO','Cancelado')}\n🛒 Loja: Amazon Brasil\n🕒 Detectado em: ${date}`;
+}
+
+function formatEstimate(value){
+  return value.split('/').map(day=>new Intl.DateTimeFormat('pt-BR',{dateStyle:'long',timeZone:'UTC'}).format(new Date(`${day}T00:00:00.000Z`))).join(' a ');
+}
+
+function deliveryDateMessage(previous,current,state){
+  return `🎮 GTA VI — DATA DE ENTREGA ALTERADA\nPrevisão anterior: ${formatEstimate(previous)}\nNova previsão: ${formatEstimate(current)}\nStatus do pedido: ${statusLabel[state]||state}\n🛒 Loja: Amazon Brasil`;
+}
+
+function shipmentEventMessage(event,state){
+  const location=event.location?`\n📍 Local: ${event.location}`:'';
+  const when=`${event.dateText}${event.timeText?`, ${event.timeText}`:''}`;
+  return `🎮 GTA VI — MOVIMENTAÇÃO NO ENVIO\n📦 ${event.message}${location}\n🕒 ${when}\nStatus do pedido: ${statusLabel[state]||state}\n🛒 Amazon Brasil`;
+}
+
+async function drainQueue(store){
+  let sentCount=0;
+  while(true){
+    const item=store.pending(); if(!item)return sentCount?{kind:'CONFIRMED',sentCount}:{kind:'EMPTY'};
+    store.mark(item.id,'sending');
+    const sent=await sendNotification(item.id,JSON.parse(item.payload));
+    if(sent.kind==='CONFIRMED'){store.mark(item.id,'confirmed',new Date().toISOString());sentCount++;continue;}
+    if(sent.kind==='UNCERTAIN')store.mark(item.id,'uncertain');
+    else store.mark(item.id,'pending');
+    return sent;
+  }
+}
+
+async function noteAuthRequired(store,reason){
+  const consecutiveChecks=store.recordAuthCheck();
+  store.recordCheck({monitorState:reason,attemptAt:new Date().toISOString(),lastResult:reason,paused:true,pauseReason:reason});
+  log('auth_required_check',{reason,consecutiveChecks,alertThreshold:AUTH_ALERT_THRESHOLD});
+  if(!shouldAlertAfterAuthChecks(consecutiveChecks,AUTH_ALERT_THRESHOLD))return;
+  const alertId=store.queueAuthAlert({message:`⚠️ GTA VI — AUTENTICAÇÃO AMAZON PENDENTE\nA janela Chromium foi aberta automaticamente, mas a Amazon ainda exige login ou verificação após ${consecutiveChecks} checagens consecutivas. Conclua na janela aberta para retomar o monitoramento.\n🛒 Amazon Brasil`});
+  if(alertId)log('monitor_auth_alert_queued',{reason,notificationId:alertId});
+  const delivery=await drainQueue(store);
+  if(delivery.kind!=='EMPTY')log('monitor_auth_alert_delivery',{reason,result:delivery.kind});
+}
+
+export async function checkOnce(store,{source='amazon',check=checkAmazon}={}){
+  const runtime=store.runtime();
+  if(runtime.paused&&!['AUTH_REQUIRED','BLOCKED'].includes(runtime.pause_reason))return {kind:'PAUSED',reason:runtime.pause_reason};
+  const attemptAt=new Date().toISOString();
+  store.recordCheck({monitorState:'CHECKING',attemptAt,lastResult:'CHECKING'});
+  try{
+    const forward=ensureAdbForward();
+    if(forward.kind==='UNAVAILABLE')log('bridge_forward_unavailable');
+    let result=await check(config);
+    if(result.kind==='AUTH_REQUIRED'||result.kind==='BLOCKED'){
+      const reason=result.kind;
+      await noteAuthRequired(store,reason);
+      log('visible_browser_opening',{reason});
+      const session=await manualAuth(config,{waitIndefinitely:true,authCheckIntervalMs:config.CHECK_INTERVAL_MINUTES*60_000,onAuthRequiredCheck:pageReason=>noteAuthRequired(store,pageReason)});
+      if(session.kind==='AUTHENTICATED'){
+        store.clearAuthAlert();
+        store.recordCheck({monitorState:'CHECKING',paused:false,pauseReason:null,lastResult:'AUTHENTICATED'});
+        log('visible_browser_session_restored');
+        result=await check(config);
+      }
+    }
+    if(result.kind==='AUTH_REQUIRED'||result.kind==='BLOCKED'){
+      const reason=result.kind;
+      store.recordCheck({monitorState:reason,lastResult:reason,paused:true,pauseReason:reason});
+      log('monitor_suspended',{reason});
+      return {kind:reason};
+    }
+    if(result.kind!=='ORDER'||!result.recognized){
+      const failures=(store.runtime().failures||0)+1;
+      store.recordCheck({monitorState:'CHECK_FAILED',lastResult:result.kind==='ORDER'?'UNKNOWN_STATUS':result.kind,failures});
+      log('check_unresolved',{result:result.kind==='ORDER'?'UNKNOWN_STATUS':result.kind,failures});
+      return {kind:'CHECK_FAILED',result:result.kind,failures};
+    }
+    store.clearAuthAlert();
+    const shipment=store.recordShipmentEvents(result.shipmentEvents||[],event=>({message:shipmentEventMessage(event,result.state)}));
+    if(shipment.baseline)log('shipment_tracking_baseline_saved',{events:shipment.added});
+    else if(shipment.added)log('shipment_events_detected',{count:shipment.added,notificationIds:shipment.notificationIds});
+    if(result.deliveryEstimate){
+      const estimate=store.recordDeliveryEstimate(result.deliveryEstimate,(previous,current)=>({message:deliveryDateMessage(previous,current,result.state)}));
+      if(estimate.changed){
+        log(estimate.previous?'delivery_estimate_changed':'delivery_estimate_baseline_saved',{
+          estimate:estimate.current,notificationId:estimate.notificationId??undefined,
+        });
+      }
+    }
+    const previous=store.current()?.[0]||'UNKNOWN';
+    if(previous==='UNKNOWN'){
+      store.recordTransition(result.state,'baseline',null);
+      store.recordCheck({monitorState:'READY',successAt:new Date().toISOString(),failures:0,paused:false,pauseReason:null,lastResult:result.state});
+      await drainQueue(store);
+      log('baseline_saved',{state:result.state});
+      return {kind:'BASELINE',state:result.state};
+    }
+    const change=transition(previous,result.state);
+    if(!change.changed){
+      store.recordCheck({monitorState:'READY',successAt:new Date().toISOString(),failures:0,paused:false,pauseReason:null,lastResult:result.state});
+      const delivery=await drainQueue(store);
+      if(delivery.kind!=='EMPTY')log('outbox_drain',{result:delivery.kind});
+      log('check_unchanged',{state:result.state});
+      return {kind:'UNCHANGED',state:result.state};
+    }
+    const at=new Date().toISOString();
+    const notification=alerts.has(result.state)?{payload:{message:messageFor(result.state,at)}}:null;
+    store.recordTransition(result.state,source,notification);
+    store.recordCheck({monitorState:'READY',successAt:at,failures:0,paused:false,pauseReason:null,lastResult:result.state});
+    const delivery=await drainQueue(store);
+    log('status_changed',{from:previous,to:result.state,notification:notification?delivery.kind:'NOT_REQUIRED'});
+    return {kind:'CHANGED',from:previous,to:result.state,delivery:notification?delivery.kind:'NOT_REQUIRED'};
+  }catch(error){
+    const failures=(store.runtime().failures||0)+1;
+    store.recordCheck({monitorState:'CHECK_FAILED',lastResult:error.name==='TimeoutError'?'TIMEOUT':'NETWORK_OR_BROWSER_ERROR',failures});
+    log('check_failed',{error:error.name||'Error',failures});
+    return {kind:'CHECK_FAILED',failures};
+  }
+}
+
+export async function runScheduler(store,{check=checkAmazon,signal}={}){
+  if(!config.orderId)throw Error('Configure AMAZON_ORDER_ID no arquivo .env');
+  return runPollingLoop({
+    check:()=>checkOnce(store,{check}),
+    intervalMs:config.CHECK_INTERVAL_MINUTES*60_000,
+    signal,
+    stopWhen:result=>['AUTH_REQUIRED','BLOCKED','PAUSED'].includes(result.kind),
+    onCycle:result=>{
+      if(['AUTH_REQUIRED','BLOCKED','PAUSED'].includes(result.kind))return;
+    const failures=store.runtime().failures||0;
+      log('next_check_scheduled',{minutes:config.CHECK_INTERVAL_MINUTES,failures});
+    },
+  });
+}
+
+export { drainQueue };

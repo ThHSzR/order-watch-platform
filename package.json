@@ -1,0 +1,34 @@
+{
+  "name": "amazon-order-watcher",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": ["packages/order-watch-core"],
+  "engines": { "node": ">=20" },
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "test"
+  },
+  "scripts": {
+    "test": "node --test",
+    "start": "node src/index.js",
+    "status": "node src/index.js status",
+    "check": "node src/index.js check",
+    "auth": "node src/index.js auth",
+    "history": "node src/index.js history",
+    "outbox": "node src/index.js outbox"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "Monitor local do status da pré-venda GTA VI na Amazon Brasil com notificações por WhatsApp via ponte Baileys no A30",
+  "type": "module",
+  "dependencies": {
+    "@jeremias/order-watch-core": "*",
+    "dotenv": "^18.0.10",
+    "linkedom": "^0.18.15",
+    "playwright": "^1.65.0",
+    "sql.js": "^1.16.0",
+    "zod": "^4.6.7"
+  }
+}

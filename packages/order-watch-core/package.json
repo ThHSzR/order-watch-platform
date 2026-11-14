@@ -1,0 +1,10 @@
+{
+  "name": "@jeremias/order-watch-core",
+  "version": "0.1.0",
+  "description": "Reusable polling, event de-duplication, and retry policies for authenticated order monitors.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "exports": {
+    ".": "./src/index.js"
+  }
+}

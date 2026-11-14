@@ -1,0 +1,15 @@
+node_modules/
+.env
+.env.*
+!.env.example
+data/*.sqlite
+*.sqlite
+*.sqlite-journal
+data/amazon-profile/
+data/watcher.lock
+data/*.tmp
+data/*.json
+data/*.log
+*.log
+playwright-profile/
+logs/
