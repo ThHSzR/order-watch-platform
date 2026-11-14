@@ -22,7 +22,7 @@ if (shouldAlertAfterAuthChecks(consecutiveAuthChecks, 2)) await sendAuthWarning(
 
 await runPollingLoop({
   check: checkOrder,
-  intervalMs: 60_000,
+  intervalMs: 10 * 60_000,
   signal,
   stopWhen: result => result.kind === 'STOPPED',
 });

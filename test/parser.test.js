@@ -11,7 +11,12 @@ const asin='B000000001';
 const url=`https://www.amazon.com.br/progress-tracker/package?orderId=${orderId}`;
 
 test('reconhece o status ativo do rastreador e confirma produto e pedido específicos',()=>{
-  assert.deepEqual(parseOrder(fixture,{orderId,asin},url),{kind:'ORDER',state:'ORDER_CONFIRMED',recognized:true,statusText:'Pedido feito'});
+  const result=parseOrder(fixture,{orderId,asin},url);
+  assert.equal(result.kind,'ORDER');
+  assert.equal(result.state,'ORDER_CONFIRMED');
+  assert.equal(result.recognized,true);
+  assert.equal(result.statusText,'Pedido feito');
+  assert.deepEqual(result.shipmentEvents,[]);
 });
 test('mapeia estados Amazon conhecidos e não inventa estado desconhecido',()=>{
   for(const [label,state] of [['Enviado','SHIPPED'],['Saiu para entrega','OUT_FOR_DELIVERY'],['Entregue','DELIVERED'],['Pedido cancelado','CANCELLED']]) assert.equal(parseStatus(label).state,state);

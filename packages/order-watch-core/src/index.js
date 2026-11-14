@@ -27,14 +27,14 @@ function waitFor(ms, signal) {
   });
 }
 
-export async function runPollingLoop({ check, intervalMs, signal, stopWhen = () => false, onCycle = () => {} }) {
+export async function runPollingLoop({ check, intervalMs, signal, stopWhen = () => false, onCycle = () => {}, wait = waitFor }) {
   if (typeof check !== 'function') throw new TypeError('check must be a function');
   if (!Number.isFinite(intervalMs) || intervalMs < 1) throw new RangeError('intervalMs must be positive');
   while (!signal?.aborted) {
     const result = await check();
     await onCycle(result);
     if (stopWhen(result)) return result;
-    await waitFor(intervalMs, signal);
+    await wait(intervalMs, signal);
   }
   return { kind: 'STOPPED' };
 }
