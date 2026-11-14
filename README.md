@@ -13,6 +13,7 @@ Watcher local em Windows para o status do pedido GTA VI. Usa um perfil Chromium 
 - A previsão de entrega é salva separadamente; uma alteração gera alerta mesmo se o estado do pedido não mudar.
 - Eventos novos da linha do tempo de rastreamento geram alertas individuais, deduplicados entre as checagens. A primeira leitura cria a linha de base sem reenviar eventos antigos.
 - Se a Amazon pedir autenticação, o watcher abre o Chromium imediatamente e espera pela autenticação automática. Só envia aviso pelo WhatsApp se a 3ª checagem consecutiva continuar exigindo autenticação; ao recuperar a sessão, zera o contador.
+- Após três consultas consecutivas com falha, envia um aviso único; quando a leitura volta a funcionar, informa a recuperação. Se a ponte estiver indisponível durante a falha, o aviso de recuperação é enviado quando possível.
 
 ## Login manual e operação
 

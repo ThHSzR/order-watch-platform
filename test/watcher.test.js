@@ -66,3 +66,49 @@ test('queda de internet preserva estado e a checagem seguinte recupera',()=>with
   assert.equal(recovered.kind,'UNCHANGED');
   assert.equal(store.runtime().failures,0);
 }));
+test('regressão de estado não grava movimentos nem previsão antes de leitura válida',()=>withStore(async store=>{
+  store.recordTransition('SHIPPED','baseline',null);
+  store.recordDeliveryEstimate('2026-11-16');
+  store.recordShipmentEvents([]);
+  const event={eventKey:'movement-1',dateText:'14 de novembro',timeText:'12:00',message:'Chegou à instalação',location:'São Paulo'};
+  const send=async()=>({kind:'CONFIRMED'});
+  const conflicting=await checkOnce(store,{...isolated,send,check:async()=>({kind:'ORDER',state:'PREPARING',recognized:true,deliveryEstimate:'2026-11-17',shipmentEvents:[event]})});
+  assert.equal(conflicting.result,'STATE_CONFLICT');
+  assert.equal(store.deliveryEstimate(),'2026-11-16');
+  assert.equal(store.notifications().length,0);
+  const valid=await checkOnce(store,{...isolated,send,check:async()=>({kind:'ORDER',state:'SHIPPED',recognized:true,deliveryEstimate:'2026-11-17',shipmentEvents:[event]})});
+  assert.equal(valid.kind,'UNCHANGED');
+  assert.equal(store.deliveryEstimate(),'2026-11-17');
+  assert.deepEqual(store.notifications().map(item=>item.state).sort(),['DELIVERY_DATE_CHANGED','SHIPMENT_EVENT']);
+}));
+test('avisa uma vez após três falhas e confirma recuperação',()=>withStore(async store=>{
+  const sent=[];
+  const send=async(_id,payload)=>{sent.push(payload.message);return {kind:'CONFIRMED'};};
+  for(let i=1;i<=4;i++){
+    const result=await checkOnce(store,{...isolated,send,check:async()=>{throw new Error('offline');}});
+    assert.equal(result.failures,i);
+  }
+  assert.equal(sent.length,1);
+  assert.match(sent[0],/MONITORAMENTO COM FALHAS/);
+  const recovered=await checkOnce(store,{...isolated,send,check:async()=>({kind:'ORDER',state:'ORDER_CONFIRMED',recognized:true})});
+  assert.equal(recovered.kind,'BASELINE');
+  assert.equal(sent.length,2);
+  assert.match(sent[1],/MONITORAMENTO RESTABELECIDO/);
+  assert.equal(store.runtime().failures,0);
+}));
+test('relata a recuperação mesmo quando a ponte esteve indisponível durante a falha',()=>withStore(async store=>{
+  let bridgeReady=false;
+  const sent=[];
+  const send=async(_id,payload)=>{
+    if(!bridgeReady)return {kind:'SKIPPED',reason:'bridge_unreachable'};
+    sent.push(payload.message);
+    return {kind:'CONFIRMED'};
+  };
+  for(let i=0;i<3;i++)await checkOnce(store,{...isolated,send,check:async()=>{throw new Error('offline');}});
+  assert.equal(store.notifications()[0].status,'pending');
+  bridgeReady=true;
+  await checkOnce(store,{...isolated,send,check:async()=>({kind:'ORDER',state:'ORDER_CONFIRMED',recognized:true})});
+  assert.equal(sent.length,1);
+  assert.match(sent[0],/MONITORAMENTO RESTABELECIDO/);
+  assert.equal(store.notifications().find(item=>item.state==='MONITOR_CHECK_FAILED').status,'cancelled');
+}));

@@ -18,6 +18,7 @@ const log=(event,fields={})=>{
   try { fs.appendFileSync(logPath,`${line}\n`,{mode:0o600}); } catch {}
 };
 const AUTH_ALERT_THRESHOLD=2;
+const FAILURE_ALERT_THRESHOLD=3;
 
 function messageFor(state,at){
   const date=new Intl.DateTimeFormat('pt-BR',{dateStyle:'short',timeStyle:'short',timeZone:'America/Sao_Paulo'}).format(new Date(at));
@@ -43,12 +44,32 @@ async function drainQueue(store,send=sendNotification){
   while(true){
     const item=store.pending(); if(!item)return sentCount?{kind:'CONFIRMED',sentCount}:{kind:'EMPTY'};
     store.mark(item.id,'sending');
-    const sent=await send(item.id,JSON.parse(item.payload));
+    let sent;
+    try { sent=await send(item.id,JSON.parse(item.payload)); }
+    catch { store.mark(item.id,'uncertain'); return {kind:'UNCERTAIN'}; }
     if(sent.kind==='CONFIRMED'){store.mark(item.id,'confirmed',new Date().toISOString());sentCount++;continue;}
     if(sent.kind==='UNCERTAIN')store.mark(item.id,'uncertain');
     else store.mark(item.id,'pending');
     return sent;
   }
+}
+
+async function noteFailure(store,result,{send,logger,error}={}){
+  const failures=(store.runtime().failures||0)+1;
+  store.recordCheck({monitorState:'CHECK_FAILED',lastResult:result,failures});
+  logger('check_failed',{result,error,failures});
+  if(failures>=FAILURE_ALERT_THRESHOLD){
+    const alertId=store.queueFailureAlert({message:`⚠️ GTA VI — MONITORAMENTO COM FALHAS\nA consulta do pedido falhou ${failures} vezes consecutivas. Último resultado: ${result}. O monitor continuará tentando a cada ${config.CHECK_INTERVAL_MINUTES} minutos.\n🛒 Amazon Brasil`});
+    if(alertId)logger('monitor_failure_alert_queued',{notificationId:alertId,failures});
+    const delivery=await drainQueue(store,send);
+    if(delivery.kind!=='EMPTY')logger('monitor_failure_alert_delivery',{result:delivery.kind});
+  }
+  return {kind:'CHECK_FAILED',result,failures};
+}
+
+function noteRecovery(store,logger){
+  const notificationId=store.clearFailureAlert({message:'✅ GTA VI — MONITORAMENTO RESTABELECIDO\nA consulta do pedido voltou a funcionar.\n🛒 Amazon Brasil'});
+  if(notificationId)logger('monitor_recovery_queued',{notificationId});
 }
 
 async function noteAuthRequired(store,reason,send,logger){
@@ -90,11 +111,12 @@ export async function checkOnce(store,{source='amazon',check=checkAmazon,authent
       return {kind:reason};
     }
     if(result.kind!=='ORDER'||!result.recognized){
-      const failures=(store.runtime().failures||0)+1;
-      store.recordCheck({monitorState:'CHECK_FAILED',lastResult:result.kind==='ORDER'?'UNKNOWN_STATUS':result.kind,failures});
-      logger('check_unresolved',{result:result.kind==='ORDER'?'UNKNOWN_STATUS':result.kind,failures});
-      return {kind:'CHECK_FAILED',result:result.kind,failures};
+      return noteFailure(store,result.kind==='ORDER'?'UNKNOWN_STATUS':result.kind,{send,logger});
     }
+    const previous=store.current()?.[0]||'UNKNOWN';
+    let change;
+    try { change=transition(previous,result.state); }
+    catch(error) { return noteFailure(store,'STATE_CONFLICT',{send,logger,error:error.message}); }
     store.clearAuthAlert();
     const shipment=store.recordShipmentEvents(result.shipmentEvents||[],event=>({message:shipmentEventMessage(event,result.state)}));
     if(shipment.baseline)logger('shipment_tracking_baseline_saved',{events:shipment.added});
@@ -107,17 +129,17 @@ export async function checkOnce(store,{source='amazon',check=checkAmazon,authent
         });
       }
     }
-    const previous=store.current()?.[0]||'UNKNOWN';
     if(previous==='UNKNOWN'){
       store.recordTransition(result.state,'baseline',null);
       store.recordCheck({monitorState:'READY',successAt:new Date().toISOString(),failures:0,paused:false,pauseReason:null,lastResult:result.state});
+      noteRecovery(store,logger);
       await drainQueue(store,send);
       logger('baseline_saved',{state:result.state});
       return {kind:'BASELINE',state:result.state};
     }
-    const change=transition(previous,result.state);
     if(!change.changed){
       store.recordCheck({monitorState:'READY',successAt:new Date().toISOString(),failures:0,paused:false,pauseReason:null,lastResult:result.state});
+      noteRecovery(store,logger);
       const delivery=await drainQueue(store,send);
       if(delivery.kind!=='EMPTY')logger('outbox_drain',{result:delivery.kind});
       logger('check_unchanged',{state:result.state});
@@ -127,14 +149,12 @@ export async function checkOnce(store,{source='amazon',check=checkAmazon,authent
     const notification=alerts.has(result.state)?{payload:{message:messageFor(result.state,at)}}:null;
     store.recordTransition(result.state,source,notification);
     store.recordCheck({monitorState:'READY',successAt:at,failures:0,paused:false,pauseReason:null,lastResult:result.state});
+    noteRecovery(store,logger);
     const delivery=await drainQueue(store,send);
     logger('status_changed',{from:previous,to:result.state,notification:notification?delivery.kind:'NOT_REQUIRED'});
     return {kind:'CHANGED',from:previous,to:result.state,delivery:notification?delivery.kind:'NOT_REQUIRED'};
   }catch(error){
-    const failures=(store.runtime().failures||0)+1;
-    store.recordCheck({monitorState:'CHECK_FAILED',lastResult:error.name==='TimeoutError'?'TIMEOUT':'NETWORK_OR_BROWSER_ERROR',failures});
-    logger('check_failed',{error:error.name||'Error',failures});
-    return {kind:'CHECK_FAILED',failures};
+    return noteFailure(store,error.name==='TimeoutError'?'TIMEOUT':'NETWORK_OR_BROWSER_ERROR',{send,logger,error:error.name||'Error'});
   }
 }
 

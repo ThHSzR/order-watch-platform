@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseOrder, classifyPage, parseStatus } from '../src/parser.js';
+import { parseHTML } from 'linkedom';
+import { parseOrder, classifyPage, parseStatus, parseShipmentEvents } from '../src/parser.js';
 
 const fixture=fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),'fixtures','tracking.html'),'utf8');
 const orderId='111-1111111-1111111';
@@ -35,4 +36,10 @@ test('recusa URL de outro pedido, produto errado e status ausente',()=>{
 test('detecta autenticação e CAPTCHA sem tentar contorná-los',()=>{
   assert.equal(classifyPage('<form id="ap_signin_form"><input type="password"></form>','https://www.amazon.com.br/ap/signin'),'AUTH_REQUIRED');
   assert.equal(classifyPage('<h1>Robot Check</h1><input name="captcha">'),'BLOCKED');
+});
+test('extrai horários distintos de movimentos iguais no mesmo local',()=>{
+  const html='<div><span class="tracking-event-date">14 de novembro</span><div class="a-row a-spacing-large"><span class="tracking-event-time">10:00</span><span class="tracking-event-message">Chegou à instalação</span><span class="tracking-event-location">São Paulo</span></div><div class="a-row a-spacing-large"><span class="tracking-event-time">11:00</span><span class="tracking-event-message">Chegou à instalação</span><span class="tracking-event-location">São Paulo</span></div></div>';
+  const events=parseShipmentEvents(parseHTML(html).document);
+  assert.deepEqual(events.map(event=>event.timeText),['10:00','11:00']);
+  assert.notEqual(events[0].eventKey,events[1].eventKey);
 });

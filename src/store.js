@@ -20,7 +20,7 @@ export async function openStore(filename, { readonly = false } = {}) {
     CREATE TABLE IF NOT EXISTS shipment_tracking_meta (id INTEGER PRIMARY KEY CHECK(id=1), initialized INTEGER NOT NULL DEFAULT 0);
     INSERT OR IGNORE INTO shipment_tracking_meta(id,initialized) VALUES(1,0);
     CREATE TABLE IF NOT EXISTS shipment_events (event_key TEXT PRIMARY KEY, event_date TEXT NOT NULL, event_time TEXT NOT NULL, message TEXT NOT NULL, location TEXT NOT NULL DEFAULT '', first_seen_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS monitor_alert_state (id INTEGER PRIMARY KEY CHECK(id=1), auth_alert_active INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS monitor_alert_state (id INTEGER PRIMARY KEY CHECK(id=1), auth_alert_active INTEGER NOT NULL DEFAULT 0, failure_alert_active INTEGER NOT NULL DEFAULT 0);
     INSERT OR IGNORE INTO monitor_alert_state(id,auth_alert_active) VALUES(1,0);`);
   const historyColumns = new Set(db.exec('PRAGMA table_info(history)')[0]?.values?.map(row => row[1]) ?? []);
   if (!readonly && !historyColumns.has('source')) { db.run("ALTER TABLE history ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'"); historyColumns.add('source'); }
@@ -30,6 +30,7 @@ export async function openStore(filename, { readonly = false } = {}) {
   if (!readonly && !runtimeColumns.has('last_result')) { db.run('ALTER TABLE runtime ADD COLUMN last_result TEXT'); runtimeColumns.add('last_result'); }
   const monitorAlertColumns = new Set(db.exec('PRAGMA table_info(monitor_alert_state)')[0]?.values?.map(row => row[1]) ?? []);
   if (!readonly && monitorAlertColumns.size && !monitorAlertColumns.has('consecutive_auth_checks')) db.run('ALTER TABLE monitor_alert_state ADD COLUMN consecutive_auth_checks INTEGER NOT NULL DEFAULT 0');
+  if (!readonly && monitorAlertColumns.size && !monitorAlertColumns.has('failure_alert_active')) db.run('ALTER TABLE monitor_alert_state ADD COLUMN failure_alert_active INTEGER NOT NULL DEFAULT 0');
   const hasRuntime = runtimeColumns.size > 0;
   const hasNotificationStatus = notificationColumns.has('status');
   if (!readonly && notificationColumns.has('status')) db.run("UPDATE notifications SET status='uncertain' WHERE status='sending'");
@@ -105,6 +106,12 @@ export async function openStore(filename, { readonly = false } = {}) {
           if(!existing.event_time&&event.timeText)db.run('UPDATE shipment_events SET event_time=? WHERE event_key=?',[event.timeText,event.eventKey]);
           continue;
         }
+        const prior=query("SELECT event_key,event_time FROM shipment_events WHERE event_date=? AND message=? AND location=? AND (event_time=? OR event_time='' OR ?='') LIMIT 1",
+          [event.dateText,event.message,event.location||'',event.timeText||'',event.timeText||'']);
+        if(prior.length){
+          if(!prior[0].event_time&&event.timeText)db.run('UPDATE shipment_events SET event_time=? WHERE event_key=?',[event.timeText,prior[0].event_key]);
+          continue;
+        }
         db.run("INSERT INTO shipment_events(event_key,event_date,event_time,message,location,first_seen_at) VALUES(?,?,?,?,?,datetime('now'))",
           [event.eventKey,event.dateText,event.timeText,event.message,event.location||'']);
         added++;
@@ -137,17 +144,34 @@ export async function openStore(filename, { readonly = false } = {}) {
       db.run("UPDATE notifications SET status='cancelled' WHERE state='MONITOR_AUTH_REQUIRED' AND status='pending'");
     });
   }
+  function queueFailureAlert(payload) {
+    return transact(() => {
+      const active=Number(query('SELECT failure_alert_active FROM monitor_alert_state WHERE id=1')[0]?.failure_alert_active??0)===1;
+      if(active)return null;
+      db.run('UPDATE monitor_alert_state SET failure_alert_active=1 WHERE id=1');
+      return insertNotification('MONITOR_CHECK_FAILED',payload);
+    });
+  }
+  function clearFailureAlert(payload) {
+    return transact(() => {
+      const active=Number(query('SELECT failure_alert_active FROM monitor_alert_state WHERE id=1')[0]?.failure_alert_active??0)===1;
+      if(!active)return null;
+      db.run('UPDATE monitor_alert_state SET failure_alert_active=0 WHERE id=1');
+      db.run("UPDATE notifications SET status='cancelled' WHERE state='MONITOR_CHECK_FAILED' AND status='pending'");
+      return insertNotification('MONITOR_RECOVERED',payload);
+    });
+  }
   function query(sql, params = []) {
     const stmt = db.prepare(sql);
     try { stmt.bind(params); const rows=[]; while (stmt.step()) rows.push(stmt.getAsObject()); return rows; }
     finally { stmt.free(); }
   }
-  function pending() { return hasNotificationStatus ? query("SELECT * FROM notifications WHERE status='pending' ORDER BY created_at,id LIMIT 1")[0] ?? null : null; }
+  function pending() { return hasNotificationStatus ? query("SELECT * FROM notifications WHERE status='pending' ORDER BY CAST(id AS INTEGER) LIMIT 1")[0] ?? null : null; }
   function mark(id, status, sentAt = null) {
     transact(() => db.run('UPDATE notifications SET status=?,sent_at=COALESCE(?,sent_at) WHERE id=?', [status,sentAt,id]));
   }
   function history() { return historyColumns.has('source') ? query('SELECT old_state,new_state,at,source FROM history ORDER BY id DESC LIMIT 50') : query("SELECT old_state,new_state,at,'legacy' AS source FROM history ORDER BY id DESC LIMIT 50"); }
   function notifications() { return hasNotificationStatus ? query('SELECT id,state,status,created_at,sent_at FROM notifications ORDER BY created_at DESC LIMIT 50') : query("SELECT id,state,CASE WHEN sent_at IS NULL THEN 'uncertain' ELSE 'confirmed' END AS status,created_at,sent_at FROM notifications ORDER BY created_at DESC LIMIT 50"); }
   function close() { if (!readonly) persist(); db.close(); }
-  return { current, runtime, recordCheck, setPaused, recordTransition, deliveryEstimate, recordDeliveryEstimate, recordShipmentEvents, queueAuthAlert, recordAuthCheck, clearAuthAlert, pending, mark, history, notifications, close };
+  return { current, runtime, recordCheck, setPaused, recordTransition, deliveryEstimate, recordDeliveryEstimate, recordShipmentEvents, queueAuthAlert, recordAuthCheck, clearAuthAlert, queueFailureAlert, clearFailureAlert, pending, mark, history, notifications, close };
 }

@@ -14,7 +14,9 @@ export function validateBridgeUrl(settings) {
 }
 export async function sendNotification(notificationId, payload, fetchFn = fetch, settings = config) {
   if (!settings.TAILSCALE_NOTIFY_URL || !settings.TAILSCALE_TOKEN) return { kind: 'SKIPPED', reason: 'bridge_not_configured' };
-  const bridgeUrl = validateBridgeUrl(settings);
+  let bridgeUrl;
+  try { bridgeUrl = validateBridgeUrl(settings); }
+  catch { return { kind: 'SKIPPED', reason: 'invalid_bridge_url' }; }
   const id = `amazon-order-${notificationId}`;
   try {
     const response = await fetchFn(bridgeUrl, {

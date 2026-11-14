@@ -22,7 +22,7 @@ export function parseShipmentEvents(root) {
     const message=text(node);
     const location=text(row?.querySelector('.tracking-event-location'));
     if(!dateText||!message)return null;
-    const eventKey=stableEventKey([dateText,message,location]);
+    const eventKey=stableEventKey([dateText,timeText,message,location]);
     return {eventKey,dateText,timeText,message,location};
   }).filter(Boolean);
 }
