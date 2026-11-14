@@ -22,6 +22,11 @@ test('mapeia estados Amazon conhecidos e não inventa estado desconhecido',()=>{
   for(const [label,state] of [['Enviado','SHIPPED'],['Saiu para entrega','OUT_FOR_DELIVERY'],['Entregue','DELIVERED'],['Pedido cancelado','CANCELLED']]) assert.equal(parseStatus(label).state,state);
   assert.equal(parseStatus('Sua encomenda está a caminho').state,'UNKNOWN');
 });
+test('não confunde entrega negada com pedido entregue',()=>{
+  for (const label of ['Não entregue','Não foi entregue','Ainda não entregue','Not delivered'])
+    assert.deepEqual(parseStatus(label),{state:'UNKNOWN',recognized:false});
+  assert.equal(parseStatus('Entregue').state,'DELIVERED');
+});
 test('recusa URL de outro pedido, produto errado e status ausente',()=>{
   assert.equal(parseOrder(fixture,{orderId,asin},url.replace(orderId,'222-2222222-2222222')).kind,'ORDER_MISMATCH');
   assert.equal(parseOrder(fixture,{orderId,asin:'B000000002'},url).kind,'ITEM_MISMATCH');

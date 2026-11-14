@@ -31,7 +31,7 @@ Estados reconhecidos: Pedido feito/confirmado, preparando, enviado, saiu para en
 
 ## Ponte Baileys
 
-O .env usa `http://127.0.0.1:18761/send`, autenticado com o token privado do A30. O ADB reafirma o encaminhamento antes de cada consulta. A ponte deve responder com receiptId. Falha de conexão mantém alertas pendentes; timeout ambíguo fica em uncertain para evitar duplicação.
+O `.env` pode usar `http://127.0.0.1:18761/send` com encaminhamento ADB ou o endereço IPv4 da Tailnet do A30. Para acesso direto, defina `TAILSCALE_NOTIFY_HOST` com o mesmo host da URL; HTTP direto é aceito apenas na faixa IPv4 da Tailnet. O token fica privado no `.env`. Redirecionamentos são recusados. A ponte deve responder com `receiptId`. Falha de conexão mantém alertas pendentes; timeout ambíguo fica em `uncertain` para evitar duplicação.
 
     npm start -- outbox
     npm start -- flush

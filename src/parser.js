@@ -30,6 +30,8 @@ export function parseShipmentEvents(root) {
 export function parseStatus(value) {
   if (typeof value !== 'string' || !value.trim()) return { state:'UNKNOWN', recognized:false };
   const normalized=value.normalize('NFKC').replace(/\s+/g,' ').trim();
+  if (/\b(?:n[aã]o\s+(?:foi\s+)?entregue|not\s+delivered)\b/i.test(normalized))
+    return { state:'UNKNOWN',recognized:false };
   for (const [state,re] of statusRules) if (re.test(normalized)) return { state,recognized:true };
   return { state:'UNKNOWN',recognized:false };
 }
