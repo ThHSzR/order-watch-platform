@@ -22,7 +22,8 @@
 - Ponte HTTP Baileys ativa em `127.0.0.1:18761` no Termux, alcançada do PC por `adb forward`.
 - O token está somente no `.env` local e no arquivo privado do watcher no A30; não foi registrado em logs.
 - O pacote Winterhold foi desativado e suspenso a pedido do usuário; nenhuma notificação ativa dele permanece.
-- A Tailnet do A30 aparece offline, portanto o encaminhamento operacional atual é ADB USB.
+- O A30 tem dois nós: `Galaxy A30-1` (Android nativo) e `homelab-termux` (Termux). A rota ADB USB é principal; `homelab-termux` é reserva quando estiver online.
+- O script `~/.termux/boot/40-amazon-bridge` restaura o processo Baileys após o boot do Home Lab se o estado desejado for `online`.
 - A mensagem de ativação do monitoramento foi enviada pela ponte e recebeu confirmação do Baileys.
 - A previsão de entrega é acompanhada independentemente do estado do pedido; mudanças criam notificações persistentes no outbox.
 

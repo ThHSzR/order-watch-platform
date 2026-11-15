@@ -1,6 +1,6 @@
 # Amazon Order Watcher — Thiago-PC
 
-Watcher local em Windows para o status do pedido GTA VI. Usa um perfil Chromium exclusivo; o login e o MFA são manuais e a aplicação lê somente a página configurada. As notificações usam a ponte Baileys do A30 encaminhada por ADB USB.
+Watcher local em Windows para o status do pedido GTA VI. Usa um perfil Chromium exclusivo; o login e o MFA são manuais e a aplicação lê somente a página configurada. As notificações usam a ponte Baileys do A30 por ADB USB ou Tailnet.
 
 ## Estado atual
 
