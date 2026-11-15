@@ -32,7 +32,9 @@ Estados reconhecidos: Pedido feito/confirmado, preparando, enviado, saiu para en
 
 ## Ponte Baileys
 
-O `.env` pode usar `http://127.0.0.1:18761/send` com encaminhamento ADB ou o endereço IPv4 da Tailnet do A30. Para acesso direto, defina `TAILSCALE_NOTIFY_HOST` com o mesmo host da URL; HTTP direto é aceito apenas na faixa IPv4 da Tailnet. O token fica privado no `.env`. Redirecionamentos são recusados. A ponte deve responder com `receiptId`. Falha de conexão mantém alertas pendentes; timeout ambíguo fica em `uncertain` para evitar duplicação.
+O `.env` usa `http://127.0.0.1:18761/send` com encaminhamento ADB como rota principal e pode configurar o IPv4 da Tailnet em `TAILSCALE_NOTIFY_FALLBACK_URL`. Defina `TAILSCALE_NOTIFY_HOST` com esse IP. A rota reserva só é tentada após falha definitiva de conexão; respostas e timeouts ambíguos não são repetidos, para evitar duplicação. O token fica privado no `.env`. Redirecionamentos são recusados. A ponte deve responder com `receiptId`.
+
+No A30, `scripts/a30-boot-bridge.sh` reinicia o processo PM2 `bom-dia` após a restauração do Home Lab se `desired.json` pedir estado `online`. A configuração `enabled=false` mantém o envio diário desligado; o processo fornece apenas a sessão Baileys para a ponte. O script não altera o dump PM2 compartilhado.
 
     npm start -- outbox
     npm start -- flush

@@ -13,6 +13,7 @@ const schema = z.object({
   ADB_SERIAL: z.string().default(''),
   ADB_FORWARD_PORT: z.coerce.number().int().min(1024).max(65535).default(18761),
   TAILSCALE_NOTIFY_URL: z.string().url().optional(),
+  TAILSCALE_NOTIFY_FALLBACK_URL: z.string().url().optional(),
   TAILSCALE_NOTIFY_HOST: z.string().optional(),
   TAILSCALE_TOKEN: z.string().min(24).optional(),
   LOG_LEVEL: z.enum(['debug','info','warn','error']).default('info'),

@@ -26,3 +26,25 @@ test('não repete automaticamente quando a resposta é incerta', async () => {
   const result=await sendNotification('7',{message:'🎮 GTA VI'},async()=>new Response('{}',{status:202}),settings);
   assert.equal(result.kind,'UNCERTAIN');
 });
+test('usa Tailnet após recusa de conexão ADB, com a mesma chave de idempotência', async () => {
+  const routes=[];
+  const dual={...settings,TAILSCALE_NOTIFY_URL:'http://127.0.0.1:18761/send',TAILSCALE_NOTIFY_FALLBACK_URL:settings.TAILSCALE_NOTIFY_URL};
+  const result=await sendNotification('43',{message:'🎮 GTA VI — teste'},async(url,options)=>{
+    routes.push({url,id:options.headers['idempotency-key']});
+    if(routes.length===1)throw Object.assign(new Error('connect'),{cause:{code:'ECONNREFUSED'}});
+    return new Response(JSON.stringify({receiptId:'Baileys-ID'}),{status:200});
+  },dual);
+  assert.equal(result.kind,'CONFIRMED');
+  assert.deepEqual(routes.map(route=>route.url),[dual.TAILSCALE_NOTIFY_URL,dual.TAILSCALE_NOTIFY_FALLBACK_URL]);
+  assert.deepEqual(routes.map(route=>route.id),['amazon-order-43','amazon-order-43']);
+});
+test('não troca de rota depois de resposta ambígua',async()=>{
+  let attempts=0;
+  const dual={...settings,TAILSCALE_NOTIFY_URL:'http://127.0.0.1:18761/send',TAILSCALE_NOTIFY_FALLBACK_URL:settings.TAILSCALE_NOTIFY_URL};
+  const result=await sendNotification('44',{message:'🎮 GTA VI — teste'},async()=>{
+    attempts++;
+    throw new DOMException('timeout','TimeoutError');
+  },dual);
+  assert.equal(result.kind,'UNCERTAIN');
+  assert.equal(attempts,1);
+});

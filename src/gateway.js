@@ -14,26 +14,30 @@ export function validateBridgeUrl(settings) {
 }
 export async function sendNotification(notificationId, payload, fetchFn = fetch, settings = config) {
   if (!settings.TAILSCALE_NOTIFY_URL || !settings.TAILSCALE_TOKEN) return { kind: 'SKIPPED', reason: 'bridge_not_configured' };
-  let bridgeUrl;
-  try { bridgeUrl = validateBridgeUrl(settings); }
+  let bridgeUrls;
+  try {
+    bridgeUrls = [settings.TAILSCALE_NOTIFY_URL, settings.TAILSCALE_NOTIFY_FALLBACK_URL]
+      .filter(Boolean).map(url => validateBridgeUrl({ ...settings, TAILSCALE_NOTIFY_URL: url }));
+  }
   catch { return { kind: 'SKIPPED', reason: 'invalid_bridge_url' }; }
   const id = `amazon-order-${notificationId}`;
-  try {
-    const response = await fetchFn(bridgeUrl, {
-      method: 'POST',
-      redirect: 'error',
-      headers: { 'content-type':'application/json', authorization:`Bearer ${settings.TAILSCALE_TOKEN}`, 'idempotency-key': id },
-      body: JSON.stringify({ text: payload.message }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    const body = await response.json().catch(() => ({}));
-    if (response.ok && body.receiptId) return { kind: 'CONFIRMED' };
-    if (body.accepted === false) return { kind: 'REJECTED', status: response.status };
-    return { kind: 'UNCERTAIN', status: response.status };
-  } catch (error) {
-    const code = error?.cause?.code;
-    if (['ECONNREFUSED','EHOSTUNREACH','ENETUNREACH','ENOTFOUND'].includes(code))
-      return { kind: 'SKIPPED', reason: 'bridge_unreachable' };
-    return { kind: 'UNCERTAIN' };
+  for (const bridgeUrl of [...new Set(bridgeUrls)]) {
+    try {
+      const response = await fetchFn(bridgeUrl, {
+        method: 'POST',
+        redirect: 'error',
+        headers: { 'content-type':'application/json', authorization:`Bearer ${settings.TAILSCALE_TOKEN}`, 'idempotency-key': id },
+        body: JSON.stringify({ text: payload.message }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (response.ok && body.receiptId) return { kind: 'CONFIRMED' };
+      if (body.accepted === false) return { kind: 'REJECTED', status: response.status };
+      return { kind: 'UNCERTAIN', status: response.status };
+    } catch (error) {
+      if (!['ECONNREFUSED','EHOSTUNREACH','ENETUNREACH','ENOTFOUND'].includes(error?.cause?.code))
+        return { kind: 'UNCERTAIN' };
+    }
   }
+  return { kind: 'SKIPPED', reason: 'bridge_unreachable' };
 }
