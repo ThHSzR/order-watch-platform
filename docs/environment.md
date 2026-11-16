@@ -30,5 +30,5 @@
 ## Testes e pendências
 
 - O login manual do perfil Amazon foi concluído e a última leitura real confirmou “Pedido feito”.
-- O Agendador do Windows mantém o monitor local ativo; o intervalo configurado é 10 minutos.
+- O Agendador do Windows mantém o monitor local ativo; o intervalo configurado é 1 minuto.
 - A ponte ADB é reafirmada antes de cada checagem; falha de conexão deixa notificações em fila para nova tentativa.

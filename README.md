@@ -8,7 +8,7 @@ Watcher local em Windows para o status do pedido GTA VI. Usa um perfil Chromium 
 - O perfil Chromium exclusivo foi autenticado manualmente e validado com uma leitura real: GTA VI para PS5 em “Pedido feito”.
 - Parser, máquina de estados, SQLite, deduplicação e fila persistente implementados.
 - Playwright e Chromium instalados; os testes locais passaram.
-- O watcher está ativo no Agendador do Windows, consultando a página a cada 10 minutos.
+- O watcher está ativo no Agendador do Windows, consultando a página a cada minuto.
 - A ponte Baileys foi validada pelo ADB USB e a mensagem de ativação foi confirmada pelo A30.
 - A previsão de entrega é salva separadamente; uma alteração gera alerta mesmo se o estado do pedido não mudar.
 - Eventos novos da linha do tempo de rastreamento geram alertas individuais, deduplicados entre as checagens. A primeira leitura cria a linha de base sem reenviar eventos antigos.
@@ -22,7 +22,7 @@ Watcher local em Windows para o status do pedido GTA VI. Usa um perfil Chromium 
     npm start -- status
     npm start -- run
 
-auth abre o perfil isolado e espera até 60 minutos pelo login/MFA. A senha não é solicitada no terminal. Verificações de segurança são concluídas manualmente; o watcher não tenta contorná-las. run consulta a cada 10 minutos; a página da Amazon não fornece eventos push ao watcher, então o atraso mínimo inclui o próximo ciclo de consulta.
+auth abre o perfil isolado e espera até 60 minutos pelo login/MFA. A senha não é solicitada no terminal. Verificações de segurança são concluídas manualmente; o watcher não tenta contorná-las. run consulta a cada minuto; a página da Amazon não fornece eventos push ao watcher, então o atraso mínimo inclui o próximo ciclo de consulta.
 
 ## Reuso em outros monitores
 
