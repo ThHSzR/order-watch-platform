@@ -20,7 +20,7 @@ export async function openStore(filename, { readonly = false } = {}) {
     CREATE TABLE IF NOT EXISTS shipment_tracking_meta (id INTEGER PRIMARY KEY CHECK(id=1), initialized INTEGER NOT NULL DEFAULT 0);
     INSERT OR IGNORE INTO shipment_tracking_meta(id,initialized) VALUES(1,0);
     CREATE TABLE IF NOT EXISTS shipment_events (event_key TEXT PRIMARY KEY, event_date TEXT NOT NULL, event_time TEXT NOT NULL, message TEXT NOT NULL, location TEXT NOT NULL DEFAULT '', first_seen_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS monitor_alert_state (id INTEGER PRIMARY KEY CHECK(id=1), auth_alert_active INTEGER NOT NULL DEFAULT 0, failure_alert_active INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS monitor_alert_state (id INTEGER PRIMARY KEY CHECK(id=1), auth_alert_active INTEGER NOT NULL DEFAULT 0, failure_alert_active INTEGER NOT NULL DEFAULT 0, unrecognized_status TEXT);
     INSERT OR IGNORE INTO monitor_alert_state(id,auth_alert_active) VALUES(1,0);`);
   const historyColumns = new Set(db.exec('PRAGMA table_info(history)')[0]?.values?.map(row => row[1]) ?? []);
   if (!readonly && !historyColumns.has('source')) { db.run("ALTER TABLE history ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'"); historyColumns.add('source'); }
@@ -31,6 +31,7 @@ export async function openStore(filename, { readonly = false } = {}) {
   const monitorAlertColumns = new Set(db.exec('PRAGMA table_info(monitor_alert_state)')[0]?.values?.map(row => row[1]) ?? []);
   if (!readonly && monitorAlertColumns.size && !monitorAlertColumns.has('consecutive_auth_checks')) db.run('ALTER TABLE monitor_alert_state ADD COLUMN consecutive_auth_checks INTEGER NOT NULL DEFAULT 0');
   if (!readonly && monitorAlertColumns.size && !monitorAlertColumns.has('failure_alert_active')) db.run('ALTER TABLE monitor_alert_state ADD COLUMN failure_alert_active INTEGER NOT NULL DEFAULT 0');
+  if (!readonly && monitorAlertColumns.size && !monitorAlertColumns.has('unrecognized_status')) db.run('ALTER TABLE monitor_alert_state ADD COLUMN unrecognized_status TEXT');
   const hasRuntime = runtimeColumns.size > 0;
   const hasNotificationStatus = notificationColumns.has('status');
   if (!readonly && notificationColumns.has('status')) db.run("UPDATE notifications SET status='uncertain' WHERE status='sending'");
@@ -161,6 +162,17 @@ export async function openStore(filename, { readonly = false } = {}) {
       return insertNotification('MONITOR_RECOVERED',payload);
     });
   }
+  function queueUnrecognizedStatus(statusText,payload) {
+    return transact(() => {
+      const previous=query('SELECT unrecognized_status FROM monitor_alert_state WHERE id=1')[0]?.unrecognized_status;
+      if(previous===statusText)return null;
+      db.run('UPDATE monitor_alert_state SET unrecognized_status=? WHERE id=1',[statusText]);
+      return insertNotification('ORDER_STATUS_UNRECOGNIZED',payload);
+    });
+  }
+  function clearUnrecognizedStatus() {
+    transact(() => db.run('UPDATE monitor_alert_state SET unrecognized_status=NULL WHERE id=1'));
+  }
   function query(sql, params = []) {
     const stmt = db.prepare(sql);
     try { stmt.bind(params); const rows=[]; while (stmt.step()) rows.push(stmt.getAsObject()); return rows; }
@@ -173,5 +185,5 @@ export async function openStore(filename, { readonly = false } = {}) {
   function history() { return historyColumns.has('source') ? query('SELECT old_state,new_state,at,source FROM history ORDER BY id DESC LIMIT 50') : query("SELECT old_state,new_state,at,'legacy' AS source FROM history ORDER BY id DESC LIMIT 50"); }
   function notifications() { return hasNotificationStatus ? query('SELECT id,state,status,created_at,sent_at FROM notifications ORDER BY created_at DESC LIMIT 50') : query("SELECT id,state,CASE WHEN sent_at IS NULL THEN 'uncertain' ELSE 'confirmed' END AS status,created_at,sent_at FROM notifications ORDER BY created_at DESC LIMIT 50"); }
   function close() { if (!readonly) persist(); db.close(); }
-  return { current, runtime, recordCheck, setPaused, recordTransition, deliveryEstimate, recordDeliveryEstimate, recordShipmentEvents, queueAuthAlert, recordAuthCheck, clearAuthAlert, queueFailureAlert, clearFailureAlert, pending, mark, history, notifications, close };
+  return { current, runtime, recordCheck, setPaused, recordTransition, deliveryEstimate, recordDeliveryEstimate, recordShipmentEvents, queueAuthAlert, recordAuthCheck, clearAuthAlert, queueFailureAlert, clearFailureAlert, queueUnrecognizedStatus, clearUnrecognizedStatus, pending, mark, history, notifications, close };
 }

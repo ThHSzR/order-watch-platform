@@ -39,6 +39,12 @@ export async function checkAmazon(cfg = config) {
   return withBrowser(true,page=>readOrder(page,cfg),cfg);
 }
 
+export function authPageResolution(result,unrecognizedForMs){
+  if(result.kind==='ORDER')return {kind:'AUTHENTICATED',state:result.state,recognized:result.recognized};
+  if(unrecognizedForMs>=10_000)return {kind:'PAGE_UNRECOGNIZED',result:result.kind};
+  return null;
+}
+
 export async function manualAuth(cfg = config, { waitIndefinitely = false, authCheckIntervalMs = 60_000, onAuthRequiredCheck = null } = {}) {
   return withBrowser(false,async page=>{
     await page.goto(cfg.orderUrl,{waitUntil:'domcontentloaded',timeout:45_000});
@@ -47,29 +53,38 @@ export async function manualAuth(cfg = config, { waitIndefinitely = false, authC
     let lastNotice='';
     let lastAuthCheckAt=Date.now();
     let authState=null;
+    let unrecognizedSince=null;
+    let pageErrorSince=null;
     while(Date.now()<deadline){
       try {
         const url=page.url();const html=await page.content();const pageKind=classifyPage(html,url);
+        pageErrorSince=null;
         if(pageKind==='BLOCKED'){
           authState='BLOCKED';
+          unrecognizedSince=null;
           if(lastNotice!=='BLOCKED')process.stdout.write('A Amazon mostrou uma verificação. Conclua-a manualmente na janela; o watcher continuará aguardando.\n');
           lastNotice='BLOCKED';
         } else if(pageKind==='AUTH_REQUIRED'){
           authState='AUTH_REQUIRED';
+          unrecognizedSince=null;
           if(lastNotice!=='AUTH_REQUIRED')process.stdout.write('Aguardando login e código MFA na janela.\n');
           lastNotice='AUTH_REQUIRED';
         } else {
           authState=null;
           lastAuthCheckAt=Date.now();
           const result=parseOrder(html,{orderId:cfg.orderId,asin:cfg.asin},url);
-          if(result.kind==='ORDER' && result.recognized)return {kind:'AUTHENTICATED',state:result.state,recognized:true};
+          unrecognizedSince??=Date.now();
+          const resolution=authPageResolution(result,Date.now()-unrecognizedSince);
+          if(resolution)return resolution;
           if(lastNotice!==result.kind){
             process.stdout.write(`Página aberta; aguardando confirmação do pedido (${result.kind}).\n`);
             lastNotice=result.kind;
           }
         }
       } catch(error) {
-        if(page.isClosed())return {kind:'AUTH_REQUIRED'};
+        if(page.isClosed())return {kind:'PAGE_UNRECOGNIZED',result:'BROWSER_CLOSED'};
+        pageErrorSince??=Date.now();
+        if(Date.now()-pageErrorSince>=30_000)return {kind:'PAGE_UNRECOGNIZED',result:'PAGE_TRANSITION'};
         if(lastNotice!=='PAGE_TRANSITION')process.stdout.write('A Amazon está carregando a próxima etapa; mantendo a janela aberta.\n');
         lastNotice='PAGE_TRANSITION';
       }

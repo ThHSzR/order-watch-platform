@@ -12,7 +12,9 @@ Watcher local em Windows para o status do pedido GTA VI. Usa um perfil Chromium 
 - A ponte Baileys foi validada pelo ADB USB e a mensagem de ativação foi confirmada pelo A30.
 - A previsão de entrega é salva separadamente; uma alteração gera alerta mesmo se o estado do pedido não mudar.
 - Eventos novos da linha do tempo de rastreamento geram alertas individuais, deduplicados entre as checagens. A primeira leitura cria a linha de base sem reenviar eventos antigos.
+- Exceções de entrega conhecidas (atraso, tentativa sem sucesso e problema de entrega) são estados próprios. Texto novo em uma página vinculada ao pedido e ao produto gera um aviso deduplicado e o monitor continua consultando.
 - Se a Amazon pedir autenticação, o watcher abre o Chromium imediatamente e espera pela autenticação automática. Só envia aviso pelo WhatsApp se a 3ª checagem consecutiva continuar exigindo autenticação; ao recuperar a sessão, zera o contador.
+- Se o login termina numa página autenticada cujo layout não é reconhecido, o watcher fecha a janela após uma curta espera e retoma as consultas; não fica preso nessa janela indefinidamente.
 - Após três consultas consecutivas com falha, envia um aviso único; quando a leitura volta a funcionar, informa a recuperação. Se a ponte estiver indisponível durante a falha, o aviso de recuperação é enviado quando possível.
 
 ## Login manual e operação
@@ -28,7 +30,7 @@ auth abre o perfil isolado e espera até 60 minutos pelo login/MFA. A senha não
 
 O repositório inclui o pacote compartilhado `packages/order-watch-core`, com loop de polling abortável, chaves estáveis para deduplicação de eventos e política de alerta após falhas consecutivas de autenticação. Adaptadores de site, armazenamento e notificações permanecem responsabilidade de cada aplicação.
 
-Estados reconhecidos: Pedido feito/confirmado, preparando, enviado, saiu para entrega, entregue e cancelado. A primeira leitura do status, da previsão e da linha do tempo é a linha de base; alterações posteriores da previsão e cada novo evento de rastreamento geram mensagens próprias, mesmo com o status do pedido inalterado. Estados desconhecidos e falhas preservam os últimos dados confiáveis.
+Estados reconhecidos: Pedido feito/confirmado, preparando, enviado, saiu para entrega, entrega atrasada, tentativa de entrega, problema na entrega, entregue e cancelado. A primeira leitura do status, da previsão e da linha do tempo é a linha de base; alterações posteriores da previsão e cada novo evento de rastreamento geram mensagens próprias, mesmo com o status do pedido inalterado. Estados desconhecidos e falhas preservam os últimos dados confiáveis.
 
 ## Ponte Baileys
 

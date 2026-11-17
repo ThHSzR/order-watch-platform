@@ -7,10 +7,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { runPollingLoop, shouldAlertAfterAuthChecks } from '@jeremias/order-watch-core';
 
-const alerts=new Set(['SHIPPED','OUT_FOR_DELIVERY','DELIVERED','CANCELLED']);
-const label={SHIPPED:'PEDIDO ENVIADO',OUT_FOR_DELIVERY:'SAIU PARA ENTREGA',DELIVERED:'PEDIDO ENTREGUE',CANCELLED:'PEDIDO CANCELADO'};
-const icon={SHIPPED:'🎮',OUT_FOR_DELIVERY:'🚚',DELIVERED:'✅',CANCELLED:'⚠️'};
-const statusLabel={UNKNOWN:'Desconhecido',ORDER_CONFIRMED:'Pedido feito',PREPARING:'Preparando',SHIPPED:'Enviado',OUT_FOR_DELIVERY:'Saiu para entrega',DELIVERED:'Entregue',CANCELLED:'Cancelado'};
+const alerts=new Set(['SHIPPED','OUT_FOR_DELIVERY','DELIVERY_DELAYED','DELIVERY_ATTEMPTED','DELIVERY_PROBLEM','DELIVERED','CANCELLED']);
+const label={SHIPPED:'PEDIDO ENVIADO',OUT_FOR_DELIVERY:'SAIU PARA ENTREGA',DELIVERY_DELAYED:'ENTREGA ATRASADA',DELIVERY_ATTEMPTED:'TENTATIVA DE ENTREGA',DELIVERY_PROBLEM:'PROBLEMA NA ENTREGA',DELIVERED:'PEDIDO ENTREGUE',CANCELLED:'PEDIDO CANCELADO'};
+const icon={SHIPPED:'🎮',OUT_FOR_DELIVERY:'🚚',DELIVERY_DELAYED:'⚠️',DELIVERY_ATTEMPTED:'⚠️',DELIVERY_PROBLEM:'⚠️',DELIVERED:'✅',CANCELLED:'⚠️'};
+const statusLabel={UNKNOWN:'Desconhecido',ORDER_CONFIRMED:'Pedido feito',PREPARING:'Preparando',SHIPPED:'Enviado',OUT_FOR_DELIVERY:'Saiu para entrega',DELIVERY_DELAYED:'Entrega atrasada',DELIVERY_ATTEMPTED:'Tentativa de entrega',DELIVERY_PROBLEM:'Problema na entrega',DELIVERED:'Entregue',CANCELLED:'Cancelado'};
 const logPath=path.join(path.dirname(config.dbPath),'watcher.log');
 const log=(event,fields={})=>{
   const line=JSON.stringify({at:new Date().toISOString(),event,...fields});
@@ -37,6 +37,18 @@ function shipmentEventMessage(event,state){
   const location=event.location?`\n📍 Local: ${event.location}`:'';
   const when=`${event.dateText}${event.timeText?`, ${event.timeText}`:''}`;
   return `🎮 GTA VI — MOVIMENTAÇÃO NO ENVIO\n📦 ${event.message}${location}\n🕒 ${when}\nStatus do pedido: ${statusLabel[state]||state}\n🛒 Amazon Brasil`;
+}
+
+function recordOrderDetails(store,result,logger,state){
+  const shipment=store.recordShipmentEvents(result.shipmentEvents||[],event=>({message:shipmentEventMessage(event,state)}));
+  if(shipment.baseline)logger('shipment_tracking_baseline_saved',{events:shipment.added});
+  else if(shipment.added)logger('shipment_events_detected',{count:shipment.added,notificationIds:shipment.notificationIds});
+  if(result.deliveryEstimate){
+    const estimate=store.recordDeliveryEstimate(result.deliveryEstimate,(previous,current)=>({message:deliveryDateMessage(previous,current,state)}));
+    if(estimate.changed)logger(estimate.previous?'delivery_estimate_changed':'delivery_estimate_baseline_saved',{
+      estimate:estimate.current,notificationId:estimate.notificationId??undefined,
+    });
+  }
 }
 
 async function drainQueue(store,send=sendNotification){
@@ -102,6 +114,10 @@ export async function checkOnce(store,{source='amazon',check=checkAmazon,authent
         store.recordCheck({monitorState:'CHECKING',paused:false,pauseReason:null,lastResult:'AUTHENTICATED'});
         logger('visible_browser_session_restored');
         result=await check(config);
+      } else if(session.kind==='PAGE_UNRECOGNIZED'){
+        store.clearAuthAlert();
+        store.recordCheck({monitorState:'CHECKING',paused:false,pauseReason:null,lastResult:'PAGE_UNRECOGNIZED'});
+        return noteFailure(store,session.result||'PAGE_UNRECOGNIZED',{send,logger});
       }
     }
     if(result.kind==='AUTH_REQUIRED'||result.kind==='BLOCKED'){
@@ -110,25 +126,27 @@ export async function checkOnce(store,{source='amazon',check=checkAmazon,authent
       logger('monitor_suspended',{reason});
       return {kind:reason};
     }
-    if(result.kind!=='ORDER'||!result.recognized){
-      return noteFailure(store,result.kind==='ORDER'?'UNKNOWN_STATUS':result.kind,{send,logger});
+    if(result.kind!=='ORDER')return noteFailure(store,result.kind,{send,logger});
+    if(!result.recognized){
+      if(!result.statusText)return noteFailure(store,'UNKNOWN_STATUS',{send,logger});
+      store.clearAuthAlert();
+      const previous=store.current()?.[0]||'UNKNOWN';
+      recordOrderDetails(store,result,logger,previous);
+      const statusText=result.statusText.replace(/\s+/g,' ').trim().slice(0,500);
+      const notificationId=store.queueUnrecognizedStatus(statusText,{message:`⚠️ GTA VI — ATUALIZAÇÃO NÃO RECONHECIDA\nA Amazon mudou o texto do rastreio: ${statusText}\nÚltimo status conhecido: ${statusLabel[previous]||previous}\n🛒 Amazon Brasil`});
+      store.recordCheck({monitorState:'UNKNOWN_STATUS',lastResult:'UNKNOWN_STATUS',failures:0,paused:false,pauseReason:null});
+      if(notificationId)logger('unknown_status_alert_queued',{notificationId});
+      const delivery=await drainQueue(store,send);
+      logger('unknown_status_observed',{notification:delivery.kind});
+      return {kind:'UNKNOWN_STATUS'};
     }
     const previous=store.current()?.[0]||'UNKNOWN';
     let change;
     try { change=transition(previous,result.state); }
     catch(error) { return noteFailure(store,'STATE_CONFLICT',{send,logger,error:error.message}); }
     store.clearAuthAlert();
-    const shipment=store.recordShipmentEvents(result.shipmentEvents||[],event=>({message:shipmentEventMessage(event,result.state)}));
-    if(shipment.baseline)logger('shipment_tracking_baseline_saved',{events:shipment.added});
-    else if(shipment.added)logger('shipment_events_detected',{count:shipment.added,notificationIds:shipment.notificationIds});
-    if(result.deliveryEstimate){
-      const estimate=store.recordDeliveryEstimate(result.deliveryEstimate,(previous,current)=>({message:deliveryDateMessage(previous,current,result.state)}));
-      if(estimate.changed){
-        logger(estimate.previous?'delivery_estimate_changed':'delivery_estimate_baseline_saved',{
-          estimate:estimate.current,notificationId:estimate.notificationId??undefined,
-        });
-      }
-    }
+    store.clearUnrecognizedStatus();
+    recordOrderDetails(store,result,logger,result.state);
     if(previous==='UNKNOWN'){
       store.recordTransition(result.state,'baseline',null);
       store.recordCheck({monitorState:'READY',successAt:new Date().toISOString(),failures:0,paused:false,pauseReason:null,lastResult:result.state});

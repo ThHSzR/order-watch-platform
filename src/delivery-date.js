@@ -62,7 +62,7 @@ export function parseDeliveryEstimate(value, now = new Date()) {
     if(result)return result;
   }
 
-  const monthDate=new RegExp(`\\b(\\d{1,2})\\s+de\\s+(${monthPattern})\\b(?:\\s+(?:de\\s+)?(\\d{4}))?`).exec(source);
+  const monthDate=new RegExp(`\\b(\\d{1,2})\\s+(?:de\\s+)?(${monthPattern})\\b(?:\\s+(?:de\\s+)?(\\d{4}))?`).exec(source);
   if(monthDate){
     const day=Number(monthDate[1]),month=monthNumber(monthDate[2]);
     const year=inferredYear(month,day,today,monthDate[3]?Number(monthDate[3]):null);

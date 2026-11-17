@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { openStore } from '../src/store.js';
 import { checkOnce } from '../src/watcher.js';
+import { authPageResolution } from '../src/amazon-browser.js';
 
 const isolated={forward:()=>({kind:'SKIPPED'}),send:async()=>({kind:'SKIPPED'}),logger:()=>{}};
 
@@ -111,4 +112,42 @@ test('relata a recuperação mesmo quando a ponte esteve indisponível durante a
   assert.equal(sent.length,1);
   assert.match(sent[0],/MONITORAMENTO RESTABELECIDO/);
   assert.equal(store.notifications().find(item=>item.state==='MONITOR_CHECK_FAILED').status,'cancelled');
+}));
+test('atraso altera estado e previsão uma vez, com dois alertas confirmados',()=>withStore(async store=>{
+  store.recordTransition('OUT_FOR_DELIVERY','baseline',null);
+  store.recordDeliveryEstimate('2026-11-16');
+  const sent=[];
+  const options={...isolated,send:async(_id,payload)=>{sent.push(payload.message);return {kind:'CONFIRMED'};},check:async()=>({kind:'ORDER',state:'DELIVERY_DELAYED',recognized:true,deliveryEstimate:'2026-11-20',shipmentEvents:[]})};
+  assert.equal((await checkOnce(store,options)).kind,'CHANGED');
+  assert.equal(store.current()[0],'DELIVERY_DELAYED');
+  assert.equal(store.deliveryEstimate(),'2026-11-20');
+  assert.deepEqual(store.notifications().map(item=>item.state).sort(),['DELIVERY_DATE_CHANGED','DELIVERY_DELAYED']);
+  assert.equal(sent.length,2);
+  assert.equal((await checkOnce(store,options)).kind,'UNCHANGED');
+  assert.equal(sent.length,2);
+}));
+test('texto novo da Amazon gera alerta deduplicado e não paralisa consulta',()=>withStore(async store=>{
+  store.recordTransition('OUT_FOR_DELIVERY','baseline',null);
+  store.recordDeliveryEstimate('2026-11-16');
+  const sent=[];
+  let statusText='A transportadora informou um novo incidente.';
+  const options={...isolated,send:async(_id,payload)=>{sent.push(payload.message);return {kind:'CONFIRMED'};},check:async()=>({kind:'ORDER',state:'UNKNOWN',recognized:false,statusText,deliveryEstimate:'2026-11-20',shipmentEvents:[]})};
+  assert.equal((await checkOnce(store,options)).kind,'UNKNOWN_STATUS');
+  assert.equal((await checkOnce(store,options)).kind,'UNKNOWN_STATUS');
+  assert.equal(sent.length,2);
+  assert.equal(store.deliveryEstimate(),'2026-11-20');
+  assert.equal(store.current()[0],'OUT_FOR_DELIVERY');
+  statusText='A transportadora alterou novamente o rastreio.';
+  await checkOnce(store,options);
+  assert.equal(sent.length,3);
+  assert.equal(store.runtime().paused,0);
+}));
+test('página autenticada não reconhecida volta ao agendamento sem pausa',()=>withStore(async store=>{
+  assert.deepEqual(authPageResolution({kind:'ORDER',state:'UNKNOWN',recognized:false},0),{kind:'AUTHENTICATED',state:'UNKNOWN',recognized:false});
+  assert.equal(authPageResolution({kind:'ITEM_MISMATCH'},9_000),null);
+  assert.deepEqual(authPageResolution({kind:'ITEM_MISMATCH'},10_000),{kind:'PAGE_UNRECOGNIZED',result:'ITEM_MISMATCH'});
+  const result=await checkOnce(store,{...isolated,check:async()=>({kind:'AUTH_REQUIRED'}),authenticate:async()=>({kind:'PAGE_UNRECOGNIZED',result:'ITEM_MISMATCH'})});
+  assert.equal(result.kind,'CHECK_FAILED');
+  assert.equal(store.runtime().paused,0);
+  assert.equal(store.runtime().last_result,'ITEM_MISMATCH');
 }));

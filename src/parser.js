@@ -2,10 +2,13 @@ import { parseHTML } from 'linkedom';
 import { stableEventKey } from '@jeremias/order-watch-core';
 import { parseDeliveryEstimate } from './delivery-date.js';
 
-export const STATES = ['UNKNOWN','ORDER_CONFIRMED','PREPARING','SHIPPED','OUT_FOR_DELIVERY','DELIVERED','CANCELLED','AUTH_REQUIRED','CHECK_FAILED'];
+export const STATES = ['UNKNOWN','ORDER_CONFIRMED','PREPARING','SHIPPED','OUT_FOR_DELIVERY','DELIVERY_DELAYED','DELIVERY_ATTEMPTED','DELIVERY_PROBLEM','DELIVERED','CANCELLED','AUTH_REQUIRED','CHECK_FAILED'];
 const statusRules = [
   ['CANCELLED', /\b(cancelad[oa]|cancelled|pedido cancelado)\b/i],
-  ['DELIVERED', /\b(entregue|foi entregue|delivered)\b/i],
+  ['DELIVERY_ATTEMPTED', /\b(tentativa de entrega|tentamos entregar|n[aã]o conseguimos entregar|delivery attempted|attempted delivery)\b/i],
+  ['DELIVERY_DELAYED', /\b(lamentamos o atraso|entrega atrasad[ao]|pacote atrasad[ao]|running late|delivery delayed)\b/i],
+  ['DELIVERY_PROBLEM', /\b(problema com (?:a )?entrega|n[aã]o (?:pode|p[oô]de) ser entregue|pacote extraviado|undeliverable|delivery problem)\b/i],
+  ['DELIVERED', /^(?:(?:seu\s+)?(?:pedido|pacote)\s+)?(?:foi\s+)?entregue\b|^delivered\b|\bentrega conclu[ií]da\b/i],
   ['OUT_FOR_DELIVERY', /\b(saiu para entrega|em rota de entrega|out for delivery)\b/i],
   ['SHIPPED', /\b(enviado|despachado|shipped)\b/i],
   ['PREPARING', /\b(preparando|prepara[cç][aã]o|processando|not yet shipped|preparing to ship)\b/i],
@@ -55,7 +58,23 @@ export function parseOrder(html,{orderId,asin=''}={},url='') {
   if(pageOrderId && pageOrderId!==orderId) return {kind:'ORDER_MISMATCH'};
   const {document}=parseHTML(html);
 
+  const exception=document.querySelector('#lexicalExceptionMessage-container');
+  const itemCarousel=document.querySelector('#itemImagesCarousel-container');
   const tracker=document.querySelector('#mainContent-container .pt-card.status-card,.mainContent-container .pt-card.status-card,#mainContent-container .pt-card');
+  if(exception||(itemCarousel&&!tracker)){
+    const itemRoot=itemCarousel||document.querySelector('#pageContainer');
+    const products=[...(itemRoot?.querySelectorAll('a[href*="/dp/"],a[href*="/gp/product/"]')||[])].filter(a=>{
+      const label=[text(a),a.getAttribute('aria-label'),a.getAttribute('title'),...[...a.querySelectorAll('img')].map(img=>img.getAttribute('alt'))].filter(Boolean).join(' ');
+      return isGta(label) && (!asin||a.href?.includes(`/dp/${asin}`)||a.href?.includes(`/gp/product/${asin}`));
+    });
+    if(products.length!==1)return {kind:products.length?'AMBIGUOUS':'ITEM_MISMATCH'};
+    const statusText=text(exception?.querySelector('h1,h2,h3,h4'))||text(exception)||text(document.querySelector('#promise-background-container'));
+    if(!statusText)return {kind:'INCOMPLETE'};
+    const deliveryText=text(document.querySelector('#promise-background-container'))||null;
+    const parsed=parseStatus(statusText);
+    return {kind:'ORDER',state:parsed.state,recognized:parsed.recognized,statusText,deliveryText,deliveryEstimate:parseDeliveryEstimate(deliveryText),shipmentEvents:parseShipmentEvents(document)};
+  }
+
   if(tracker) {
     const productRoot=document.querySelector('#topContent-container,.topContent-container');
     const products=[...(productRoot?.querySelectorAll('a')||[])].filter(a=>{
